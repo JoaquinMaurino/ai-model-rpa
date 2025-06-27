@@ -1,0 +1,42 @@
+# Entorno virtual
+venv*/
+.venv/
+env/
+ENV/
+
+# Variables de entorno
+.env
+
+# Archivos de Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Archivos de configuración
+*.log
+*.sqlite3
+*.db
+
+# Archivos de Jupyter (si los usás)
+.ipynb_checkpoints
+
+# Configs de VS Code
+.vscode/
+
+# Datos temporales
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# Modelos entrenados (si no querés versionarlos)
+*.h5
+*.hdf5
+*.keras
+*.pkl
+*.joblib
+*.pt
+*.onnx
+*.ckpt
