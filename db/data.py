@@ -15,11 +15,11 @@ def get_dataset_entrenamiento():
                     ip.deposito_asignado AS id_deposito_asignado, -- Esta es tu variable objetivo (target)
                     d.categorias AS deposito_categorias_aceptadas,
                     
-                    -- ¡Nuevo! Capacidades específicas del depósito PARA ESE PRODUCTO (de Deposito_Capacidad_Producto)
+                    -- Capacidades específicas del depósito PARA ESE PRODUCTO (de Deposito_Capacidad_Producto)
                     dcp.capacidad_maxima_unidades AS deposito_capacidad_maxima_producto,
                     dcp.capacidad_minima_unidades AS deposito_capacidad_minima_producto,
 
-                    -- ¡Nuevo! Stock actual de ese producto en ese depósito (de Inventario)
+                    -- Stock actual de ese producto en ese depósito (de Inventario)
                     COALESCE(inv.cantidad, 0) AS stock_actual_producto_en_deposito,
 
                     -- Total vendido de este producto específico desde ESTE depósito específico en el historial

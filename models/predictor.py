@@ -1,27 +1,26 @@
 import sys
 from pathlib import Path
 import joblib
-import numpy as np
 import pandas as pd
 from sqlalchemy import text
 from db.connection import get_engine
+
+# Importar solo la función necesaria de preprocessing
+# Asegúrate de que 'utils/preprocessing.py' tenga una función 'preparar_datos_para_prediccion'
 from utils.preprocessing import preparar_datos_para_prediccion
 
 # --- Configuración de Rutas de Archivos Guardados ---
-# Asegúrate de que 'models/saved/' exista y contenga los archivos generados por training.py
 MODEL_PATH = Path('models/saved/modelo_deposito.joblib')
 PREPROCESSOR_PATH = Path('models/saved/preprocessor.joblib')
 LABEL_ENCODER_Y_PATH = Path('models/saved/label_encoder_y.joblib')
 
-# --- Ajuste de sys.path para importaciones (Importante para ejecución directa) ---
-# Esto asegura que Python pueda encontrar los módulos 'db' y 'utils'
-# cuando el script se ejecuta como 'python -m models.predictor' desde la raíz del proyecto.
+# --- Ajuste de sys.path para importaciones ---
 current_script_dir = Path(__file__).resolve().parent
 project_root = current_script_dir.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-# --- Funciones de Carga y Obtención de Datos ---
+# --- Funciones de Carga de Modelo y Componentes ---
 
 def load_model_and_components():
     """Carga el modelo y los objetos de preprocesamiento guardados."""
@@ -40,11 +39,10 @@ def load_model_and_components():
         print(f"❌ Error inesperado al cargar el modelo: {e}")
         return None, None, None
 
+# --- Funciones de Interacción con la Base de Datos ---
+
 def get_todos_los_depositos_info():
-    """
-    Obtiene información básica de todos los depósitos desde la base de datos,
-    incluyendo las categorías que aceptan.
-    """
+    """Obtiene información básica de todos los depósitos desde la base de datos, incluyendo las categorías que aceptan."""
     engine = get_engine()
     if not engine:
         print("❌ No se pudo conectar a la base de datos para obtener información de depósitos.")
@@ -53,14 +51,12 @@ def get_todos_los_depositos_info():
         with engine.connect() as conn:
             query = text("SELECT id_deposito, categorias FROM deposito")
             result = conn.execute(query).fetchall()
-            # Convertir a una lista de diccionarios para fácil acceso
             return [{**row._mapping} for row in result]
     except Exception as e:
         print(f"❌ Error al obtener la información de los depósitos: {e}")
         return []
-    return []
 
-def get_deposito_candidato_features(id_producto, producto_categoria, deposito_id):
+def get_deposito_candidato_features(id_producto, deposito_id):
     """
     Obtiene las características necesarias de la base de datos para un producto y un depósito candidato.
     Esto simula una fila de datos de entrada para el modelo.
@@ -102,8 +98,7 @@ def get_deposito_candidato_features(id_producto, producto_categoria, deposito_id
 
             if result:
                 features = dict(result._mapping)
-
-                # --- Manejo de valores None: Asegurar que las capacidades y stocks sean 0 si son nulos ---
+                # Manejo de valores None: Asegurar que las capacidades y stocks sean 0 si son nulos
                 features['deposito_capacidad_maxima_producto'] = features.get('deposito_capacidad_maxima_producto') or 0
                 features['deposito_capacidad_minima_producto'] = features.get('deposito_capacidad_minima_producto') or 0
                 features['stock_actual_producto_en_deposito'] = features.get('stock_actual_producto_en_deposito') or 0
@@ -116,9 +111,67 @@ def get_deposito_candidato_features(id_producto, producto_categoria, deposito_id
         print(f"❌ Error al obtener las características para el producto {id_producto} en depósito {deposito_id}: {e}")
         return None
 
+def get_ingresos_pendientes():
+    """
+    Obtiene registros de ingreso_producto que no tienen un depósito asignado.
+    """
+    engine = get_engine()
+    if not engine:
+        print("❌ No se pudo conectar a la base de datos para obtener ingresos pendientes.")
+        return []
+    try:
+        with engine.connect() as conn:
+            query = text("SELECT id_ingreso, id_producto, cantidad FROM ingreso_producto WHERE deposito_asignado IS NULL")
+            result = conn.execute(query).fetchall()
+            print(f"ℹ️ Encontrados {len(result)} ingresos pendientes de asignación.")
+            return [{**row._mapping} for row in result]
+    except Exception as e:
+        print(f"❌ Error al obtener ingresos de productos pendientes: {e}")
+        return []
+
+def get_producto_categoria(id_producto):
+    """Obtiene la categoría de un producto a partir de su ID."""
+    engine = get_engine()
+    if not engine:
+        print("❌ No se pudo conectar a la base de datos para obtener la categoría del producto.")
+        return None
+    try:
+        with engine.connect() as conn:
+            query = text("SELECT categoria FROM producto WHERE id_producto = :id_producto")
+            result = conn.execute(query, {"id_producto": id_producto}).scalar_one_or_none()
+            return result
+    except Exception as e:
+        print(f"❌ Error al obtener la categoría para el producto {id_producto}: {e}")
+        return None
+
+def actualizar_ingreso_con_deposito(id_ingreso, id_deposito_sugerido):
+    """
+    Actualiza la columna 'deposito_asignado' en la tabla 'ingreso_producto'
+    para un registro específico.
+    """
+    engine = get_engine()
+    if not engine:
+        print("❌ No se pudo conectar a la base de datos para actualizar ingreso_producto.")
+        return False
+    try:
+        with engine.connect() as conn:
+            query = text("""
+                UPDATE ingreso_producto
+                SET deposito_asignado = :deposito_asignado
+                WHERE id_ingreso = :id_ingreso
+            """)
+            # Convertir a int() para evitar el error de tipo NumPy
+            conn.execute(query, {"deposito_asignado": int(id_deposito_sugerido), "id_ingreso": id_ingreso})
+            conn.commit() # ¡Importante! Confirmar la transacción
+            print(f"✅ Registro de ingreso {id_ingreso} actualizado con depósito {int(id_deposito_sugerido)}.")
+            return True
+    except Exception as e:
+        print(f"❌ Error al actualizar el depósito para el ingreso {id_ingreso}: {e}")
+        return False
+
 # --- Función Principal de Predicción ---
 
-def predecir_deposito_sugerido(producto_info):
+def predecir_deposito_sugerido(producto_info, model, preprocessor, label_encoder_y):
     """
     Predice el depósito sugerido para un nuevo ingreso de producto,
     considerando reglas de negocio y el modelo de Machine Learning.
@@ -141,18 +194,20 @@ def predecir_deposito_sugerido(producto_info):
         raw_categorias = dep_info.get("categorias", []) # Columna 'categorias' de la tabla 'deposito'
 
         dep_categorias_aceptadas_list = []
-        if isinstance(raw_categorias, str):
-            # Limpiar espacios en blanco alrededor de las categorías
-            dep_categorias_aceptadas_list = [c.strip() for c in raw_categorias.split(',') if c.strip()]
-        elif isinstance(raw_categorias, list):
-            # Limpiar espacios en blanco también si ya es una lista
-            dep_categorias_aceptadas_list = [c.strip() for c in raw_categorias if c.strip()]
+        # Normalizar la entrada para que sea una cadena y luego procesarla
+        if raw_categorias:
+            # Limpiar caracteres comunes de arrays o JSON ([], "", '')
+            cleaned_string = str(raw_categorias).replace('[', '').replace(']', '').replace('"', '').replace("'", "")
+            # Dividir por comas y limpiar espacios, convertir a minúsculas
+            dep_categorias_aceptadas_list = [c.strip().lower() for c in cleaned_string.split(',') if c.strip()]
         
         # Convierte la categoría del producto a minúsculas para una comparación insensible a mayúsculas/minúsculas
-        if prod_categoria.lower() in [cat.lower() for cat in dep_categorias_aceptadas_list]:
+        if prod_categoria.lower() in dep_categorias_aceptadas_list:
             depositos_validos_por_categoria.append(dep_id)
+            print(f"✅ Depósito {dep_id} SÍ acepta la categoría '{prod_categoria}'. Considerado candidato.")
         else:
-            print(f"ℹ️ Depósito {dep_id} no acepta la categoría '{prod_categoria}'. Descartado por filtro de negocio.")
+            # print(f"ℹ️ Depósito {dep_id} no acepta la categoría '{prod_categoria}'. Descartado por filtro de negocio.")
+            pass # Quité este print para no saturar la salida si hay muchos depósitos descartados
 
     # --- ALERTA CLAVE: Si ninguna categoría de depósito coincide ---
     if not depositos_validos_por_categoria:
@@ -163,7 +218,7 @@ def predecir_deposito_sugerido(producto_info):
     # --- Paso 3: Para cada depósito candidato válido, obtener características y preparar para ML ---
     depositos_info_para_ml = []
     for dep_id in depositos_validos_por_categoria:
-        deposito_features = get_deposito_candidato_features(prod_id, prod_categoria, dep_id)
+        deposito_features = get_deposito_candidato_features(prod_id, dep_id)
         if deposito_features:
             # Añadir id_deposito original para referencia posterior, antes del preprocesamiento
             deposito_features['id_deposito_original'] = dep_id
@@ -190,12 +245,9 @@ def predecir_deposito_sugerido(producto_info):
         return None
 
     # Realizar predicciones de probabilidad
-    # Esto dará un array de probabilidades, una fila por cada depósito candidato
-    # y columnas por cada clase de depósito que el modelo aprendió
     probabilidades = model.predict_proba(X_pred)
 
     # Mapear las probabilidades a los depósitos originales (descodificados)
-    # Obtener las clases ordenadas del LabelEncoder del modelo
     # Esto asegura que las columnas de 'probabilidades' corresponden a los depósitos correctos
     clases_depositos_ml = label_encoder_y.inverse_transform(model.classes_)
     
@@ -209,14 +261,8 @@ def predecir_deposito_sugerido(producto_info):
         dep_id_actual = row_pred_info['id_deposito_original']
         
         # La probabilidad para este depósito (dep_id_actual) de ser la clase correcta
-        # Asegúrate de que el 'dep_id_actual' exista como columna en df_probabilidades
-        if dep_id_actual in df_probabilidades.columns: # Comprobar si la columna existe
-            probabilidad_para_este_deposito = row_pred_info[dep_id_actual]
-        else:
-            # Esto puede ocurrir si el LabelEncoder no mapeó este depósito durante el entrenamiento
-            # O si el modelo no predijo este depósito como una de sus 'clases_'
-            probabilidad_para_este_deposito = 0.0
-            # print(f"⚠️ Advertencia: Depósito {dep_id_actual} no encontrado en las clases predichas del modelo. Probabilidad asignada 0.")
+        # Usamos .get() con un valor por defecto de 0.0 si la columna no existe
+        probabilidad_para_este_deposito = row_pred_info.get(dep_id_actual, 0.0)
 
         # Necesitamos la información completa del depósito para las reglas de capacidad
         info_deposito_completa = next((d for d in depositos_info_para_ml if d['id_deposito_original'] == dep_id_actual), None)
@@ -244,8 +290,7 @@ def predecir_deposito_sugerido(producto_info):
 
         motivos_descarte = []
 
-        # Asegurarse de que cap_max_prod sea mayor que 0 para evitar división por cero
-        if cap_max_prod > 0:
+        if cap_max_prod > 0: # Si hay una capacidad máxima definida
             ocupacion_unidades = unidades_despues_ingreso / cap_max_prod
             espacio_libre = cap_max_prod - stock_actual
             
@@ -253,10 +298,12 @@ def predecir_deposito_sugerido(producto_info):
                 motivos_descarte.append(f"Alta ocupación de unidades ({ocupacion_unidades:.2f}) después del ingreso.")
             if espacio_libre < cantidad_a_ingresar:
                 motivos_descarte.append(f"Espacio libre insuficiente ({espacio_libre} unidades) para el ingreso de {cantidad_a_ingresar} unidades.")
-        elif unidades_despues_ingreso > 0:
-             # Si no hay capacidad máxima definida (cap_max_prod es 0 o None y se convirtió a 0)
-             # y hay unidades a ingresar, entonces se considera sin capacidad suficiente.
-             motivos_descarte.append(f"Capacidad máxima no definida o es cero, y hay {unidades_despues_ingreso} unidades después del ingreso.")
+        elif cantidad_a_ingresar > 0: # Si no hay capacidad máxima definida (o es 0) y hay unidades a ingresar
+            motivos_descarte.append(f"Capacidad máxima no definida (es cero), y hay {cantidad_a_ingresar} unidades a ingresar.")
+        
+        # Si la capacidad máxima es 0 y las unidades a ingresar también son 0, entonces no hay problema.
+        # Si la capacidad máxima es 0 y las unidades a ingresar son > 0, es un problema.
+        # Por lo tanto, la condición `elif cantidad_a_ingresar > 0` cubre el caso.
 
 
         if not motivos_descarte:
@@ -279,50 +326,48 @@ def predecir_deposito_sugerido(producto_info):
 
 # --- Bloque Principal de Ejecución (Solo si el script se ejecuta directamente) ---
 if __name__ == "__main__":
-    # Cargar modelo y componentes
+    # Cargar modelo y componentes una sola vez
     model, preprocessor, label_encoder_y = load_model_and_components()
 
-    if model and preprocessor and label_encoder_y:
-        # --- Simulación de Datos de Entradas con tus categorías válidas ---
+    if not all([model, preprocessor, label_encoder_y]):
+        print("❌ Error crítico: No se pudieron cargar los componentes del modelo. Abortando.")
+        sys.exit(1) # Salir del script si no se puede continuar
 
-        # 1. Información del producto con categoría 'tecnología'
-        producto_a_ingresar = {
-            "id_producto": 5, # Ejemplo: ID de un producto existente en tu DB
-            "producto_categoria": "tecnología", # Usando una de tus categorías válidas
-            "cantidad_a_ingresar": 10, # Cantidad del nuevo ingreso
-        }
+    # 1. Obtener todos los ingresos con 'deposito_asignado' en NULL
+    ingresos_pendientes = get_ingresos_pendientes()
 
-        print("\n--- Probando Sugerencia de Depósito (Categoría: Tecnología) ---")
-        deposito_sugerido = predecir_deposito_sugerido(producto_a_ingresar)
-        print(f"Sugerencia final para el producto {producto_a_ingresar['id_producto']}: {deposito_sugerido}")
-
-        print("\n--- Probando otro producto (Categoría: Hogar) ---")
-        producto_a_ingresar_2 = {
-            "id_producto": 15, # Otro ID de producto
-            "producto_categoria": "hogar", # Usando otra categoría válida
-            "cantidad_a_ingresar": 20,
-        }
-        deposito_sugerido_2 = predecir_deposito_sugerido(producto_a_ingresar_2)
-        print(f"Sugerencia final para el producto {producto_a_ingresar_2['id_producto']}: {deposito_sugerido_2}")
-
-        print("\n--- Probando un producto que podría llenar un depósito (Categoría: Ropa) ---")
-        producto_a_ingresar_3 = {
-            "id_producto": 25, # Otro ID de producto
-            "producto_categoria": "ropa", # Usando otra categoría válida, cantidad grande
-            "cantidad_a_ingresar": 15,
-        }
-        deposito_sugerido_3 = predecir_deposito_sugerido(producto_a_ingresar_3)
-        print(f"Sugerencia final para el producto {producto_a_ingresar_3['id_producto']}: {deposito_sugerido_3}")
-
-        # --- Nuevo caso de prueba: Categoría no reconocida (para probar la alerta) ---
-        print("\n--- Probando un producto con Categoría NO RECONOCIDA ---")
-        producto_categoria_desconocida = {
-            "id_producto": 99,
-            "producto_categoria": "libros", # Categoría que NO existe en tu BD
-            "cantidad_a_ingresar": 50,
-        }
-        deposito_sugerido_desconocido = predecir_deposito_sugerido(producto_categoria_desconocida)
-        print(f"Sugerencia final para el producto {producto_categoria_desconocida['id_producto']}: {deposito_sugerido_desconocido}")
-
+    if not ingresos_pendientes:
+        print("✨ No hay ingresos pendientes para procesar. ¡Todo al día!")
     else:
-        print("❌ Error: No se pudieron cargar los componentes del modelo. Asegúrate de que 'training.py' se haya ejecutado correctamente.")
+        # 2. Iterar sobre cada ingreso pendiente y procesarlo
+        for ingreso in ingresos_pendientes:
+            id_ingreso = ingreso["id_ingreso"]
+            id_producto = ingreso["id_producto"]
+            cantidad_a_ingresar = ingreso["cantidad"]
+            
+            print(f"\n--- Procesando Ingreso ID: {id_ingreso}, Producto ID: {id_producto}, Cantidad: {cantidad_a_ingresar} ---")
+
+            # Obtener la categoría del producto, que es necesaria para la predicción
+            categoria_producto = get_producto_categoria(id_producto)
+            
+            if not categoria_producto:
+                print(f"❌ No se pudo encontrar la categoría para el producto {id_producto}. Saltando este ingreso.")
+                continue
+
+            # Preparar la información para el predictor
+            producto_a_predecir = {
+                "id_producto": id_producto,
+                "producto_categoria": categoria_producto,
+                "cantidad_a_ingresar": cantidad_a_ingresar,
+            }
+            
+            # 3. Llamar a la función de predicción
+            deposito_sugerido = predecir_deposito_sugerido(
+                producto_a_predecir, model, preprocessor, label_encoder_y
+            )
+
+            # 4. Si se obtiene una sugerencia, actualizar la base de datos
+            if deposito_sugerido is not None: # Usar 'is not None' para manejar 0 o False si fueran posibles sugerencias
+                actualizar_ingreso_con_deposito(id_ingreso, deposito_sugerido)
+            else:
+                print(f"🚫 No se pudo determinar un depósito para el ingreso {id_ingreso}. Permanecerá como pendiente.")

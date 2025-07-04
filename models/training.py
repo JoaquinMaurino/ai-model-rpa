@@ -3,7 +3,7 @@ import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
 from db.data import get_dataset_entrenamiento
-from utils.preprocessing import preparar_dataset_entrenamiento # ¡Importar la función actualizada!
+from utils.preprocessing import preparar_dataset_entrenamiento
 import joblib
 
 # Importar los modelos de Scikit-learn
